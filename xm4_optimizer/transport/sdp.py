@@ -3,13 +3,15 @@
 Sends a ServiceSearchAttributeRequest (Bluetooth Core Spec, Vol 3, Part B, §4.7) over
 L2CAP PSM 1 and walks the ProtocolDescriptorList (attribute 0x0004) of each matching
 record for the RFCOMM protocol UUID (0x0003) followed by its channel number.
-Linux only; needs a Python built with AF_BLUETOOTH / BTPROTO_L2CAP.
+Linux needs a Python built with AF_BLUETOOTH / BTPROTO_L2CAP; on macOS the lookup is
+delegated to IOBluetooth through macos_bridge.
 """
 
 from __future__ import annotations
 
 import socket
 import struct
+import sys
 import uuid as uuid_mod
 from typing import Any, List, Optional, Tuple
 
@@ -103,6 +105,9 @@ def build_search_attr_request(service_uuid: uuid_mod.UUID, transaction_id: int, 
 
 def query_rfcomm_channel(bd_addr: str, service_uuid: str, timeout_s: float = 5.0) -> Optional[int]:
     """Returns the first RFCOMM channel the device advertises for `service_uuid`, or None."""
+    if sys.platform == "darwin":
+        from xm4_optimizer.transport import macos_bridge
+        return macos_bridge.query_rfcomm_channel(bd_addr, service_uuid, timeout_s)
     target = uuid_mod.UUID(service_uuid)
     sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
     sock.settimeout(timeout_s)

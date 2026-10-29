@@ -28,6 +28,9 @@ xm4-optimizer = "xm4_optimizer.cli:main"
 where = ["."]
 include = ["xm4_optimizer*"]
 
+[tool.setuptools.package-data]
+"xm4_optimizer.transport" = ["macos/*.swift", "macos/Info.plist"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

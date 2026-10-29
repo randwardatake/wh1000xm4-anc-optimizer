@@ -19,20 +19,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
-import re
 import socket
 import struct
-import subprocess
 import sys
 import time
-from typing import Optional
 
 # Ensure project root is in sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from xm4_optimizer.transport.rfcomm_socket import create_rfcomm_socket
+from xm4_optimizer.transport.rfcomm_socket import create_rfcomm_socket, find_connected_xm4_mac
 
 DEFAULT_MDR_CHANNEL: int = 11
 DEFAULT_RACE_CHANNEL: int = 21
@@ -41,28 +38,6 @@ PAGES_PER_PEB: int = 16
 PAGE_SIZE: int = 256
 PEB_SIZE: int = PAGES_PER_PEB * PAGE_SIZE  # 4096 bytes
 TOTAL_SIZE: int = TOTAL_PEBS * PEB_SIZE    # 524,288 bytes (512 KB)
-
-
-def find_connected_xm4_mac() -> Optional[str]:
-    """Auto-detects connected Sony WH-1000XM4 Bluetooth MAC address via bluetoothctl."""
-    try:
-        out = subprocess.check_output(["bluetoothctl", "devices", "Connected"], text=True)
-        # Lines format: "Device AC:80:0A:2E:45:80 WH-1000XM4"
-        for line in out.splitlines():
-            m = re.search(r"Device\s+([0-9A-Fa-f:]{17})\s+(.*)", line)
-            if m:
-                mac, name = m.group(1), m.group(2)
-                if "1000xm4" in name.lower() or "wh-" in name.lower():
-                    return mac
-        # Fallback to any connected device if only one
-        lines = [l for l in out.splitlines() if "Device " in l]
-        if len(lines) == 1:
-            m = re.search(r"Device\s+([0-9A-Fa-f:]{17})", lines[0])
-            if m:
-                return m.group(1)
-    except Exception:
-        pass
-    return None
 
 
 def backup_xm4_nvdm(bd_addr: str, output_path: Path, peb_count: int = TOTAL_PEBS) -> Path:

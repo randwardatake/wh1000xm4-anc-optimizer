@@ -32,7 +32,7 @@ Every claim in this repository is graded by evidence in **[docs/STATUS.md](docs/
 
 ## Requirements
 
-- Linux with BlueZ (`bluetoothctl`), Python 3.10+, `numpy`.
+- Linux with BlueZ (`bluetoothctl`), or macOS with the Xcode Command Line Tools (see [macOS](#macos)); Python 3.10+, `numpy`.
 - The headset paired and connected.
 - At least 50% battery, the headset within about 1 m of the adapter, and audio playback paused before long transfers. Do not power off the headset during a write.
 
@@ -43,6 +43,19 @@ pip install numpy
 
 bluetoothctl devices | grep -i "WH-1000XM4"   # note the MAC address
 ```
+
+### macOS
+
+macOS Python has no `AF_BLUETOOTH`, so RFCOMM and SDP go through a small IOBluetooth helper ([`xm4_optimizer/transport/macos/rfcomm_bridge.swift`](xm4_optimizer/transport/macos/rfcomm_bridge.swift)). It is compiled with `swiftc` on first use and cached in `~/Library/Caches/xm4_optimizer`; the rest of the code sees an ordinary socket. Pair and connect the headset in System Settings, then use the same commands as on Linux. `--mac` is optional, the connected headset is found automatically.
+
+```sh
+xcode-select --install          # once, if swiftc is missing
+python3 -m venv .venv && .venv/bin/pip install numpy
+system_profiler SPBluetoothDataType | grep -A1 "WH-1000XM4"   # MAC address, if needed
+.venv/bin/python -m xm4_optimizer status
+```
+
+macOS may ask the terminal app for Bluetooth access on the first run. Device-verified on macOS 27.2 (Apple M1), firmware 3.0.1: `status`, `anc`, `tools/backup_nvdm.py` (512 KiB in 78 s, all 230 item checksums OK) and `tools/flash_firmware.py` (downgrade 3.0.1 → 2.5.0: 5,452 pages in 504 s, integrity check passed, headset reconnected on 2.5.0 about 70 s after commit). Spatial audio needs PipeWire and stays Linux only.
 
 ## 1. Back up first
 
