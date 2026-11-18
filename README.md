@@ -32,14 +32,17 @@ Every claim in this repository is graded by evidence in **[docs/STATUS.md](docs/
 
 ## Requirements
 
-- Linux with BlueZ (`bluetoothctl`), Python 3.10+, `numpy`.
+- Linux with BlueZ (`bluetoothctl`) or Windows 10/11, Python 3.10+, `numpy`.
+- **Windows:** use the python.org Python (it ships Bluetooth sockets), pair the headset in Settings first, and run from PowerShell: `py -m venv .venv; .venv\Scripts\Activate.ps1; pip install -e .`. The MAC is auto-detected through PowerShell, or pass `--mac`. Windows support is **new and untested on hardware**: the Sony control channel is not looked up over SDP there and falls back to RFCOMM channel 11. Try read-only commands (`status`, `anc status`, `backup`) before anything that writes, and prefer Linux for firmware flashing. The AeroSpatial spatial-audio part is Linux only.
+- **WSL2:** no Bluetooth by default; use native Windows or pass a USB adapter in with usbipd.
 - The headset paired and connected.
 - At least 50% battery, the headset within about 1 m of the adapter, and audio playback paused before long transfers. Do not power off the headset during a write.
 
 ```sh
 git clone https://github.com/randwardatake/wh1000xm4-anc-optimizer.git
 cd wh1000xm4-anc-optimizer
-pip install numpy
+python3 -m venv .venv && . .venv/bin/activate   # or: uv venv && . .venv/bin/activate
+pip install -e .                                # installs numpy and the xm4-optimizer command
 
 bluetoothctl devices | grep -i "WH-1000XM4"   # note the MAC address
 ```
@@ -125,7 +128,7 @@ docs/            Documentation
 ## Tests
 
 ```sh
-pip install pytest numpy
+pip install -e ".[dev]"
 python3 -m pytest
 ```
 

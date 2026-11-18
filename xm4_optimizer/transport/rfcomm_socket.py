@@ -1,6 +1,6 @@
-"""Native Linux RFCOMM Socket Transport for Sony WH-1000XM4.
+"""RFCOMM Socket Transport (Linux and Windows) for Sony WH-1000XM4.
 
-Provides native Linux AF_BLUETOOTH RFCOMM socket handling, retry with exponential backoff,
+Provides AF_BLUETOOTH RFCOMM socket handling, retry with exponential backoff,
 timeout management, and the concrete implementation of the DeviceTransport protocol.
 """
 
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import socket
 import struct
+import sys
 import time
 from typing import Callable, Optional, Protocol, runtime_checkable
 
@@ -33,16 +34,28 @@ NVDM_PARTITION_SIZE: int = 0x80000  # 512 KB (2048 pages of 256 bytes)
 
 
 def create_rfcomm_socket(bd_addr: str, channel: int, timeout_s: float = DEFAULT_TIMEOUT_S) -> socket.socket:
-    """Creates and connects an RFCOMM socket on Linux.
+    """Creates and connects an RFCOMM socket on Linux or Windows.
 
-    Supports native socket.AF_BLUETOOTH if exported by Python, with transparent
-    libc socket(31, 1, 3) fallback for Python environments built without Bluetooth headers.
+    Uses socket.AF_BLUETOOTH / BTPROTO_RFCOMM when Python exports them (Linux with BlueZ
+    headers, and python.org builds on Windows, where it maps to Winsock AF_BTH). On Linux
+    a libc socket(31, 1, 3) fallback covers Pythons built without Bluetooth headers.
+    On Windows the headset must already be paired in Windows Settings.
     """
     if hasattr(socket, "AF_BLUETOOTH") and hasattr(socket, "BTPROTO_RFCOMM"):
         s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
         s.settimeout(timeout_s)
-        s.connect((bd_addr, channel))
+        try:
+            s.connect((bd_addr, channel))
+        except BaseException:
+            s.close()
+            raise
         return s
+
+    if sys.platform == "win32":
+        raise OSError(
+            "This Python build has no Bluetooth socket support. Use the python.org "
+            "Windows installer, which includes AF_BLUETOOTH."
+        )
 
     import ctypes
     libc = ctypes.CDLL(None, use_errno=True)
@@ -71,26 +84,91 @@ def create_rfcomm_socket(bd_addr: str, channel: int, timeout_s: float = DEFAULT_
     return s
 
 
-def find_connected_xm4_mac() -> Optional[str]:
-    """Auto-detects connected Sony WH-1000XM4 Bluetooth MAC address via bluetoothctl."""
+_NAME_HINTS = ("1000xm4", "wh-")
+
+_WINDOWS_LIST_SCRIPT = (
+    "Get-PnpDevice -Class Bluetooth -PresentOnly | "
+    "Where-Object { $_.InstanceId -match '^BTHENUM\\\\DEV_[0-9A-Fa-f]{12}' } | "
+    "ForEach-Object { $c = (Get-PnpDeviceProperty -InstanceId $_.InstanceId "
+    "-KeyName '{83DA6326-97A6-4088-9453-A1923F573B29} 15' -ErrorAction SilentlyContinue).Data; "
+    "\"$($_.InstanceId)|$($_.FriendlyName)|$c\" }"
+)
+
+
+def parse_bluetoothctl_devices(out: str) -> list[tuple[str, str]]:
+    """Parses `bluetoothctl devices [Connected]` output into (mac, name) pairs."""
     import re
+    devices = []
+    for line in out.splitlines():
+        m = re.search(r"Device\s+([0-9A-Fa-f:]{17})\s*(.*)", line)
+        if m:
+            devices.append((m.group(1), m.group(2).strip()))
+    return devices
+
+
+def parse_windows_pnp_devices(out: str) -> list[tuple[str, str, bool]]:
+    """Parses `instance_id|friendly_name|is_connected` lines into (mac, name, connected)."""
+    import re
+    devices = []
+    for line in out.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) < 2:
+            continue
+        m = re.search(r"DEV_([0-9A-Fa-f]{12})", parts[0])
+        if not m:
+            continue
+        raw = m.group(1).upper()
+        mac = ":".join(raw[i:i + 2] for i in range(0, 12, 2))
+        connected = len(parts) > 2 and parts[2].strip().lower() == "true"
+        devices.append((mac, parts[1].strip(), connected))
+    return devices
+
+
+def _pick_xm4(devices: list[tuple[str, str]]) -> Optional[str]:
+    for mac, name in devices:
+        if any(h in name.lower() for h in _NAME_HINTS):
+            return mac
+    if len(devices) == 1:
+        return devices[0][0]
+    return None
+
+
+def _list_windows_devices() -> list[tuple[str, str, bool]]:
+    import subprocess
+    out = subprocess.check_output(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_LIST_SCRIPT],
+        text=True, timeout=20, stderr=subprocess.DEVNULL,
+    )
+    return parse_windows_pnp_devices(out)
+
+
+def find_connected_xm4_mac() -> Optional[str]:
+    """Auto-detects the connected Sony WH-1000XM4 MAC (bluetoothctl on Linux, PowerShell on Windows)."""
     import subprocess
     try:
+        if sys.platform == "win32":
+            connected = [(m, n) for m, n, c in _list_windows_devices() if c]
+            return _pick_xm4(connected)
         out = subprocess.check_output(["bluetoothctl", "devices", "Connected"], text=True)
-        for line in out.splitlines():
-            m = re.search(r"Device\s+([0-9A-Fa-f:]{17})\s+(.*)", line)
-            if m:
-                mac, name = m.group(1), m.group(2)
-                if "1000xm4" in name.lower() or "wh-" in name.lower():
-                    return mac
-        lines = [l for l in out.splitlines() if "Device " in l]
-        if len(lines) == 1:
-            m = re.search(r"Device\s+([0-9A-Fa-f:]{17})", lines[0])
-            if m:
-                return m.group(1)
+        return _pick_xm4(parse_bluetoothctl_devices(out))
     except Exception:
-        pass
-    return None
+        return None
+
+
+def is_link_connected(bd_addr: str) -> Optional[bool]:
+    """True/False if the OS reports the link state of `bd_addr`; None if it cannot be queried."""
+    import subprocess
+    try:
+        if sys.platform == "win32":
+            want = bd_addr.upper()
+            for mac, _name, connected in _list_windows_devices():
+                if mac == want:
+                    return connected
+            return False
+        out = subprocess.check_output(["bluetoothctl", "info", bd_addr], text=True)
+        return "Connected: yes" in out
+    except Exception:
+        return None
 
 
 # --- Exception Hierarchy ---

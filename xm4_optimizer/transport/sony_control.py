@@ -18,7 +18,7 @@ import time
 from typing import Optional
 
 from xm4_optimizer.transport.protocol_mdr import MdrPacket, MdrStreamDecoder
-from xm4_optimizer.transport.rfcomm_socket import create_rfcomm_socket
+from xm4_optimizer.transport.rfcomm_socket import DEFAULT_MDR_CHANNEL, create_rfcomm_socket
 from xm4_optimizer.transport.sdp import query_rfcomm_channel
 
 SONY_CONTROL_UUID_V1: str = "96cc203e-5068-46ad-b32d-e316f5e069ba"
@@ -122,6 +122,8 @@ class SonyControlClient:
     def connect(cls, bd_addr: str, channel: Optional[int] = None) -> "SonyControlClient":
         if channel is None:
             channel = query_rfcomm_channel(bd_addr, SONY_CONTROL_UUID_V1)
+            if channel is None and not hasattr(socket, "BTPROTO_L2CAP"):
+                channel = DEFAULT_MDR_CHANNEL  # no SDP over L2CAP on this platform (Windows)
             if channel is None:
                 raise SonyControlError("Device does not advertise the Sony MDR v1 control service")
         client = cls(create_rfcomm_socket(bd_addr, channel, timeout_s=5.0))
