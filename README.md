@@ -33,7 +33,7 @@ Every claim in this repository is graded by evidence in **[docs/STATUS.md](docs/
 ## Requirements
 
 - Linux with BlueZ (`bluetoothctl`) or Windows 10/11, Python 3.10+, `numpy`.
-- **Windows:** use the python.org Python (it ships Bluetooth sockets), pair the headset in Settings first, and run from PowerShell: `py -m venv .venv; .venv\Scripts\Activate.ps1; pip install -e .`. The MAC is auto-detected through PowerShell, or pass `--mac`. Windows support is **new and untested on hardware**: the Sony control channel is not looked up over SDP there and falls back to RFCOMM channel 11. Try read-only commands (`status`, `anc status`, `backup`) before anything that writes, and prefer Linux for firmware flashing. The AeroSpatial spatial-audio part is Linux only.
+- **Windows:** use the python.org Python (it ships Bluetooth sockets), pair the headset in Settings first, and run from PowerShell: `py -m venv .venv; .venv\Scripts\Activate.ps1; pip install -e .`. The MAC is auto-detected through PowerShell, or pass `--mac`. Windows support is **new**: the Sony control channel is not looked up over SDP there and falls back to RFCOMM channel 9 (`status` and `anc status` verified on firmware 3.0.1). Try read-only commands (`status`, `anc status`, `backup`) before anything that writes, and prefer Linux for firmware flashing. The AeroSpatial spatial-audio part is Linux only.
 - **WSL2:** no Bluetooth by default; use native Windows or pass a USB adapter in with usbipd.
 - The headset paired and connected.
 - At least 50% battery, the headset within about 1 m of the adapter, and audio playback paused before long transfers. Do not power off the headset during a write.
@@ -46,6 +46,19 @@ pip install -e .                                # installs numpy and the xm4-opt
 
 bluetoothctl devices | grep -i "WH-1000XM4"   # note the MAC address
 ```
+
+## Desktop app (XM4 Control)
+
+A small window for status, noise control, firmware install and backups. Run it from a checkout with `xm4-optimizer-gui` (or `python -m xm4_optimizer.gui`).
+
+**Standalone Windows executable.** `XM4 Control.exe` is one file that needs no Python on the target PC. Pair and connect the headset in Windows Settings, then run it. Backups and downloaded firmware go to `Documents\XM4 Control\`. The file is not code-signed, so Windows SmartScreen may warn on first start (More info → Run anyway). To build it (on Windows, with the python.org Python):
+
+```powershell
+pip install -e ".[build]"
+python packaging/build_windows_exe.py   # writes dist\XM4 Control.exe
+```
+
+Firmware install in the app only accepts the five official images (by SHA-256), needs at least 50% battery, and always takes and verifies a full settings backup first; it does not flash if that backup fails. `tools/flash_firmware.py` does the same unless given `--no-backup`.
 
 ## 1. Back up first
 

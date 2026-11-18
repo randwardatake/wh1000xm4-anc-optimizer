@@ -20,9 +20,15 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
 ]
+build = [
+    "pyinstaller>=6.0",
+]
 
 [project.scripts]
 xm4-optimizer = "xm4_optimizer.cli:main"
+
+[project.gui-scripts]
+xm4-optimizer-gui = "xm4_optimizer.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

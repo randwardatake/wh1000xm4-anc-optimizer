@@ -137,7 +137,8 @@ def _list_windows_devices() -> list[tuple[str, str, bool]]:
     import subprocess
     out = subprocess.check_output(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_LIST_SCRIPT],
-        text=True, timeout=20, stderr=subprocess.DEVNULL,
+        text=True, timeout=20, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return parse_windows_pnp_devices(out)
 

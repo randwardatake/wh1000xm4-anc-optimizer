@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from xm4_optimizer.firmware import identify_firmware
+from xm4_optimizer.firmware import identify_firmware, identify_firmware_file
 from xm4_optimizer.transport.rfcomm_socket import create_rfcomm_socket
 
 HEAD = 0x15
@@ -258,7 +258,7 @@ def flash_firmware(bd_addr: str, fw_path: Path, allow_unknown: bool = False) -> 
                 print(f"\rFlashing: [{p_idx+1}/{total_pages}] ({pct:.1f}%) — {speed:.1f} KB/s", end="", flush=True)
 
         elapsed = time.time() - t0
-        print(f"\nStaging complete in {elapsed:.1f}s ({fw_len / 1024 / elapsed:.1f} KB/s)!")
+        print(f"\nStaging complete in {elapsed:.1f}s ({fw_len / 1024 / max(elapsed, 0.001):.1f} KB/s)!")
 
         print("Requesting device firmware integrity check...")
         race.request(CMD_CHECK_INTEGRITY, bytes([0x01, 0x00, storage]), timeout=20.0)
@@ -293,7 +293,25 @@ def main() -> None:
     parser.add_argument("--mac", required=True, help="Bluetooth MAC address of the headphones (e.g. AC:80:0A:2E:45:80)")
     parser.add_argument("--firmware", required=True, type=Path, help="Path to signed Sony firmware .bin file")
     parser.add_argument("--allow-unknown-firmware", action="store_true", help="Flash even if the file's SHA-256 is not a known official image")
+    parser.add_argument("--backup-out", type=Path, default=None,
+                        help="Where to save the pre-flash settings backup (default: backups/xm4_nvdm_<time>_before-<version>.bin)")
+    parser.add_argument("--no-backup", action="store_true",
+                        help="Skip the settings backup that is otherwise taken and verified before flashing")
     args = parser.parse_args()
+
+    known = identify_firmware_file(args.firmware) if args.firmware.exists() else None
+    will_flash = args.firmware.exists() and (known is not None or args.allow_unknown_firmware)
+    if will_flash and not args.no_backup:
+        from xm4_optimizer.backup_check import pre_firmware_backup_path, take_verified_backup
+        out = args.backup_out or pre_firmware_backup_path(known.version if known else "unknown")
+        print(f"Backing up settings to {out} before changing firmware (--no-backup skips this)...")
+        try:
+            summary = take_verified_backup(args.mac, out)
+        except Exception as e:
+            print(f"Error: settings backup failed, firmware was NOT sent: {e}")
+            sys.exit(1)
+        print(f"Backup verified: {summary.describe()}\n")
+        time.sleep(3)  # let the headset leave update mode before re-entering it
 
     ok = flash_firmware(args.mac, args.firmware, allow_unknown=args.allow_unknown_firmware)
     sys.exit(0 if ok else 1)

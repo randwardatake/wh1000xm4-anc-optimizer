@@ -35,3 +35,6 @@ HANDOVER*.md
 REVIEW_*.md
 notes/
 *.local.md
+
+# Firmware images downloaded by the GUI
+firmware/
