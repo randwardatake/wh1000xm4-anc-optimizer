@@ -132,7 +132,7 @@ def backup_xm4_nvdm(bd_addr: str, output_path: Path, peb_count: int = TOTAL_PEBS
     output_path.write_bytes(bytes(dump_buffer))
     sha256 = hashlib.sha256(dump_buffer).hexdigest()
     sidecar_path = output_path.with_name(f"{output_path.name}.sha256")
-    sidecar_path.write_text(f"{sha256}  {output_path.name}\n", encoding="utf-8")
+    sidecar_path.write_text(f"{sha256}  {output_path.name}\n", encoding="utf-8", newline="\n")
 
     magic = dump_buffer[:4]
     magic_valid = (magic == b"NVDM")
