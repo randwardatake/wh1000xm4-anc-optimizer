@@ -14,7 +14,8 @@ from tools.optimizer_trigger import (
 )
 from xm4_optimizer.nvdm.cxd90050 import OptimizerCoefficient
 from xm4_optimizer.nvdm.parser import parse_nvdm_image
-from xm4_optimizer.transport.protocol_mdr import MdrPacket, MdrPacketType
+from xm4_optimizer.transport.protocol_mdr import MdrPacket
+from xm4_optimizer.transport.sony_control import MessageType
 from xm4_optimizer.transport.virtual_device import VirtualXM4Device
 
 
@@ -36,7 +37,7 @@ class TestFraming:
         packet, remaining = MdrPacket.from_wire_bytes(wire)
         assert packet is not None
         assert remaining == b""
-        assert packet.packet_type == MdrPacketType.COMMAND
+        assert packet.packet_type == MessageType.COMMAND_1
         assert packet.seq_num == 1
         assert packet.payload == OPTIMIZER_START_PAYLOAD == bytes.fromhex("84010001")
 

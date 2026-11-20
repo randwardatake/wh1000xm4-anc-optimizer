@@ -92,6 +92,22 @@ cp presets/Sony_WF-1000XM4_SuperReview_3D_Spatial.json ~/.var/app/com.github.wwm
 flatpak run --command=easyeffects com.github.wwmm.easyeffects -l Sony_WF-1000XM4_SuperReview_3D_Spatial
 ```
 
+## 3b. Runtime settings over MDR (no firmware or NVDM writes)
+
+The official app changes most user settings through the Sony MDR v1 control service, not through raw flash writes. The same commands are exposed here; the firmware persists the resulting state itself. Command bytes were device-verified on firmware 2.5.0 by [Fanxingkeming/sony-headphones-control](https://github.com/Fanxingkeming/sony-headphones-control/blob/main/docs/protocol-reference.md) (see [STATUS.md](docs/STATUS.md)).
+
+```sh
+python3 -m xm4_optimizer settings get all
+python3 -m xm4_optimizer settings set speak-to-chat 0
+python3 -m xm4_optimizer settings set voice-guidance off
+python3 -m xm4_optimizer settings set auto-power-off 0x1100   # disable auto power off
+python3 -m xm4_optimizer settings set dsee 0
+python3 -m xm4_optimizer settings set eq-preset 0             # EQ off
+python3 -m xm4_optimizer settings set eq-bands 0,0,0,2,6,10   # six gains in dB, -10..10
+```
+
+Supported keys: `touch-panel`, `multipoint`, `dsee`, `connection-quality`, `pause-when-removed`, `auto-power-off`, `speak-to-chat`, `voice-guidance`, `eq-preset`, `eq-bands`. Voice guidance uses MDR Table 2; the language **pack** itself is a large CDN download handled by Sony's app and is not implemented here.
+
 ## 4. Spatial audio (experimental)
 
 AeroSpatial places the left and right channels on two virtual speakers using an HRTF (Valve Steam Audio). It is stereo virtualization: it cannot recover instrument positions or height from a stereo recording, and it does not decode Sony 360 Reality Audio or Dolby Atmos. The first live Spotify test sounded muffled and collapsed to the center. Fixes are in place but have not passed a new listening test. See the [Linux notes](aerospatial/pipewire/README.md), the [roadmap](docs/SPATIAL_ROADMAP.md) and the [literature review](docs/research/SPATIAL_AUDIO_LITERATURE.md).
@@ -115,7 +131,7 @@ xm4_optimizer/   Python package and CLI (python3 -m xm4_optimizer)
   nvdm/          NVDM parser (validated on a real dump); cxd90050.py holds the unverified biquad model
   dsp/           Q4.28 fixed point, biquad synthesis, stability checks, frequency response
   safety/        dry-run, injector, verifier, rollback (emulator only, see STATUS)
-tools/           backup_nvdm.py, flash_firmware.py, optimizer_trigger.py (NC Optimizer experiment), Steam Audio download and PipeWire scripts
+tools/           backup_nvdm.py, flash_firmware.py, optimizer_trigger.py (NC Optimizer experiment), config_write_probe.py / nvkey_write_probe.py (write-path experiments), Steam Audio download and PipeWire scripts
 aerospatial/     C++ spatial audio prototype (Steam Audio + PipeWire)
 presets/         EQ presets
 tests/           430 Python tests (emulator, parser fuzzing, DSP); C++ tests live in aerospatial/tests

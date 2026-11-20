@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum
 import socket
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 from xm4_optimizer.transport.protocol_mdr import MdrPacket, MdrStreamDecoder
 from xm4_optimizer.transport.rfcomm_socket import create_rfcomm_socket
@@ -43,6 +43,42 @@ class Code(IntEnum):
     AMBIENT_SOUND_CONTROL_RET = 0x67
     AMBIENT_SOUND_CONTROL_SET = 0x68
     AMBIENT_SOUND_CONTROL_NOTIFY = 0x69
+    # Table 1 (0x0C) setting families. Verified on XM4 v2.5.0; see
+    # https://github.com/Fanxingkeming/sony-headphones-control/blob/main/docs/protocol-reference.md
+    EQ_GET = 0x56
+    EQ_RET = 0x57
+    EQ_SET = 0x58
+    GENERAL_GET = 0xD6
+    GENERAL_RET = 0xD7
+    GENERAL_SET = 0xD8
+    AUDIO_GET = 0xE6
+    AUDIO_RET = 0xE7
+    AUDIO_SET = 0xE8
+    SYSTEM_GET = 0xF6
+    SYSTEM_RET = 0xF7
+    SYSTEM_SET = 0xF8
+    NC_OPTIMIZER_START = 0x84
+    NC_OPTIMIZER_STATE_GET = 0x86
+    NC_OPTIMIZER_STATE_RET = 0x87
+    # Table 2 (0x0E) voice guidance
+    VOICE_GUIDANCE_SET = 0x48
+    VOICE_GUIDANCE_RET = 0x49
+
+
+class GeneralSetting(IntEnum):
+    TOUCH_PANEL = 0xD1
+    MULTIPOINT = 0xD2
+
+
+class AudioSetting(IntEnum):
+    CONNECTION_QUALITY = 0x01
+    DSEE = 0x02
+
+
+class SystemSetting(IntEnum):
+    PAUSE_WHEN_REMOVED = 0x03
+    AUTO_POWER_OFF = 0x04
+    SPEAK_TO_CHAT = 0x05
 
 
 class AncMode(Enum):
@@ -145,8 +181,8 @@ class SonyControlClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _send(self, payload: bytes) -> None:
-        self._sock.sendall(MdrPacket(packet_type=MessageType.COMMAND_1, seq_num=self._seq, payload=payload).to_wire_bytes())
+    def _send(self, payload: bytes, table: MessageType = MessageType.COMMAND_1) -> None:
+        self._sock.sendall(MdrPacket(packet_type=table, seq_num=self._seq, payload=payload).to_wire_bytes())
         self._seq ^= 1
 
     def _receive(self, deadline: float):
@@ -170,12 +206,13 @@ class SonyControlClient:
         for _ in self._receive(time.monotonic() + seconds):
             pass
 
-    def request(self, payload: bytes, reply_codes: tuple) -> bytes:
-        self._send(payload)
+    def request(self, payload: bytes, reply_codes: tuple,
+                table: MessageType = MessageType.COMMAND_1) -> bytes:
+        self._send(payload, table=table)
         for reply in self._receive(time.monotonic() + self._timeout_s):
             if reply[0] in reply_codes:
                 return reply
-        raise SonyControlError(f"No reply to request {payload.hex()}")
+        raise SonyControlError(f"No reply to request {payload.hex()} (table 0x{table:02X})")
 
     def get_firmware_version(self) -> str:
         return decode_firmware_version(self.request(bytes([Code.FW_VERSION_REQUEST, 0x02]), (Code.FW_VERSION_REPLY,)))
@@ -190,3 +227,81 @@ class SonyControlClient:
         """Sets the mode and returns the state read back from the headset."""
         self.request(encode_ambient_set(state), (Code.AMBIENT_SOUND_CONTROL_NOTIFY,))
         return self.get_ambient_sound()
+
+    # --- Settings exposed by the MDR v1 control service ---------------------
+    # These are the commands the official app uses. The firmware persists the
+    # resulting state to NVDM itself, so no raw flash write is needed.
+
+    def get_eq(self) -> bytes:
+        """6-band EQ: reply is 57 01 <preset> 06 <6 bytes>, gains biased by +10."""
+        return self.request(bytes([Code.EQ_GET, 0x01]), (Code.EQ_RET,))
+
+    def set_eq_preset(self, preset: int) -> bytes:
+        if not 0 <= preset <= 0xFF:
+            raise ValueError("preset must be a byte")
+        self._send(bytes([Code.EQ_SET, 0x01, preset, 0x00]))
+        time.sleep(0.2)
+        return self.get_eq()
+
+    def set_eq_bands(self, bands_gain_db: Sequence[float]) -> bytes:
+        """Six gains in dB (-10..10); encoded as gain+10."""
+        if len(bands_gain_db) != 6:
+            raise ValueError("exactly six EQ bands are required")
+        encoded = []
+        for gain in bands_gain_db:
+            value = int(round(gain)) + 10
+            if not 0 <= value <= 20:
+                raise ValueError("EQ gains must be within -10..10 dB")
+            encoded.append(value)
+        self._send(bytes([Code.EQ_SET, 0x01, 0xFF, 0x06, *encoded]))
+        time.sleep(0.2)
+        return self.get_eq()
+
+    def get_general_setting(self, setting: GeneralSetting) -> bytes:
+        return self.request(bytes([Code.GENERAL_GET, setting]), (Code.GENERAL_RET,))
+
+    def set_general_setting(self, setting: GeneralSetting, value: int) -> bytes:
+        self._send(bytes([Code.GENERAL_SET, setting, 0x01, value & 0xFF]))
+        time.sleep(0.2)
+        return self.get_general_setting(setting)
+
+    def get_audio_setting(self, setting: AudioSetting) -> bytes:
+        return self.request(bytes([Code.AUDIO_GET, setting]), (Code.AUDIO_RET,))
+
+    def set_audio_setting(self, setting: AudioSetting, value: int) -> bytes:
+        self._send(bytes([Code.AUDIO_SET, setting, 0x00, value & 0xFF]))
+        time.sleep(0.2)
+        return self.get_audio_setting(setting)
+
+    def get_system_setting(self, setting: SystemSetting) -> bytes:
+        return self.request(bytes([Code.SYSTEM_GET, setting]), (Code.SYSTEM_RET,))
+
+    def set_system_setting(self, setting: SystemSetting, value: int) -> bytes:
+        self._send(bytes([Code.SYSTEM_SET, setting, 0x01, value & 0xFF]))
+        time.sleep(0.2)
+        return self.get_system_setting(setting)
+
+    def set_auto_power_off(self, mode: int) -> bytes:
+        """XM4 v2.5.0 accepts only 0x1000 (off when removed) or 0x1100 (disabled)."""
+        if mode not in (0x1000, 0x1100):
+            raise ValueError("mode must be 0x1000 (off when removed) or 0x1100 (disabled)")
+        self._send(bytes([Code.SYSTEM_SET, SystemSetting.AUTO_POWER_OFF, 0x01,
+                          (mode >> 8) & 0xFF, mode & 0xFF]))
+        time.sleep(0.2)
+        return self.get_system_setting(SystemSetting.AUTO_POWER_OFF)
+
+    def set_voice_guidance(self, enabled: bool) -> bytes:
+        """Table 2 command; 0x00 = on, 0x01 = off (libmdr OnOffSettingValue)."""
+        value = 0x00 if enabled else 0x01
+        return self.request(
+            bytes([Code.VOICE_GUIDANCE_SET, 0x01, 0x01, value]),
+            (Code.VOICE_GUIDANCE_RET,),
+            table=MessageType.COMMAND_2,
+        )
+
+    def start_nc_optimizer(self) -> None:
+        self._send(bytes([Code.NC_OPTIMIZER_START, 0x01, 0x00, 0x01]))
+
+    def get_nc_optimizer_state(self) -> bytes:
+        return self.request(bytes([Code.NC_OPTIMIZER_STATE_GET, 0x01]),
+                            (Code.NC_OPTIMIZER_STATE_RET,))

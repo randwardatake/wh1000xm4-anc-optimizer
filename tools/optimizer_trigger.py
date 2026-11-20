@@ -32,16 +32,16 @@ from xm4_optimizer.nvdm.cxd90050 import OptimizerCoefficient
 from xm4_optimizer.nvdm.parser import parse_nvdm_image
 from xm4_optimizer.transport.protocol_mdr import (
     MdrPacket,
-    MdrPacketType,
     MdrStreamDecoder,
 )
 from xm4_optimizer.transport.rfcomm_socket import create_rfcomm_socket
+from xm4_optimizer.transport.sony_control import MessageType
 
 # Device-verified on firmware 2.5.0 (docs/STATUS.md). The exact MDR service/channel
 # combination is selectable because it can differ between units.
 OPTIMIZER_START_PAYLOAD: bytes = bytes.fromhex("84010001")
 OPTIMIZER_STATUS_CODE: int = 0x85
-DEFAULT_MDR_CHANNEL: int = 11
+DEFAULT_MDR_CHANNEL: int = 9  # Sony MDR v1 control service on the tested unit
 DEFAULT_TIMEOUT_S: float = 45.0
 ACK_PACKET_TYPE: int = 0x01  # ACK type used by the working channel-11 handshake
 
@@ -91,7 +91,7 @@ def format_coeff(words: list[int], label: str) -> str:
 
 def build_start_frame(seq: int = 0) -> bytes:
     return MdrPacket(
-        packet_type=MdrPacketType.COMMAND,
+        packet_type=MessageType.COMMAND_1,
         seq_num=seq,
         payload=OPTIMIZER_START_PAYLOAD,
     ).to_wire_bytes()

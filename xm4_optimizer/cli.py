@@ -80,8 +80,11 @@ from xm4_optimizer.transport.rfcomm_socket import (
 from xm4_optimizer.transport.sony_control import (
     AmbientSoundState,
     AncMode,
+    AudioSetting,
+    GeneralSetting,
     SonyControlClient,
     SonyControlError,
+    SystemSetting,
 )
 from xm4_optimizer.transport.virtual_device import VirtualXM4Device
 
@@ -404,6 +407,77 @@ def _run_status_workflow(mac: Optional[str]) -> int:
     return 0
 
 
+SETTING_KEYS = {
+    "touch-panel": (GeneralSetting.TOUCH_PANEL, "general"),
+    "multipoint": (GeneralSetting.MULTIPOINT, "general"),
+    "dsee": (AudioSetting.DSEE, "audio"),
+    "connection-quality": (AudioSetting.CONNECTION_QUALITY, "audio"),
+    "pause-when-removed": (SystemSetting.PAUSE_WHEN_REMOVED, "system"),
+    "auto-power-off": (SystemSetting.AUTO_POWER_OFF, "system"),
+    "speak-to-chat": (SystemSetting.SPEAK_TO_CHAT, "system"),
+}
+
+
+def _run_settings_workflow(mac: str, action: str, key: Optional[str], value: Optional[str]) -> int:
+    """Reads or writes a headset setting through the MDR v1 control service."""
+    if action == "get":
+        if key is None:
+            print("ERROR: settings get requires a key (or 'all').")
+            return 1
+        if key == "all":
+            keys = list(SETTING_KEYS)
+        elif key in SETTING_KEYS:
+            keys = [key]
+        else:
+            print(f"ERROR: unknown setting '{key}'. Use all or one of: {', '.join(SETTING_KEYS)}")
+            return 1
+    else:
+        if key is None or value is None:
+            print("ERROR: settings set requires a key and a value.")
+            return 1
+        if key not in SETTING_KEYS and key not in ("eq-preset", "eq-bands", "voice-guidance"):
+            print(f"ERROR: unknown setting '{key}'.")
+            return 1
+
+    try:
+        with SonyControlClient.connect(mac) as client:
+            if action == "get":
+                if key == "all":
+                    print(f"EQ: {client.get_eq().hex()}")
+                for name in keys:
+                    enum_value, family = SETTING_KEYS[name]
+                    if family == "general":
+                        reply = client.get_general_setting(enum_value)
+                    elif family == "audio":
+                        reply = client.get_audio_setting(enum_value)
+                    else:
+                        reply = client.get_system_setting(enum_value)
+                    print(f"{name:20s}: {reply.hex()}")
+                return 0
+
+            if key == "voice-guidance":
+                reply = client.set_voice_guidance(value.lower() in ("1", "on", "true", "yes"))
+            elif key == "eq-preset":
+                reply = client.set_eq_preset(int(value, 0))
+            elif key == "eq-bands":
+                reply = client.set_eq_bands([float(v) for v in value.split(",")])
+            else:
+                enum_value, family = SETTING_KEYS[key]
+                if key == "auto-power-off":
+                    reply = client.set_auto_power_off(int(value, 0))
+                elif family == "general":
+                    reply = client.set_general_setting(enum_value, int(value, 0))
+                elif family == "audio":
+                    reply = client.set_audio_setting(enum_value, int(value, 0))
+                else:
+                    reply = client.set_system_setting(enum_value, int(value, 0))
+            print(f"{key}: {reply.hex()}")
+            return 0
+    except (OSError, SonyControlError, ValueError) as e:
+        print(f"ERROR: {e}")
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Constructs the argument parser supporting unified subcommands and legacy flags."""
     epilog_text = """
@@ -453,7 +527,7 @@ ARCHITECTURAL DISTINCTION: FLASHER vs. INJECTOR
     parser.add_argument(
         "positional",
         nargs="*",
-        help="Subcommand: backup, flash, inject, dry-run, verify, rollback, parse, optimize, anc, spatial, status.",
+        help="Subcommand: backup, flash, inject, dry-run, verify, rollback, parse, optimize, anc, settings, spatial, status.",
     )
     return parser
 
@@ -500,6 +574,22 @@ def run_cli(
             return 1
         mode = subarg or "status"
         return _run_anc_workflow(mac=effective_mac, mode=mode, level=ns.level, voice=ns.voice)
+
+    if subcmd == "settings":
+        effective_mac = _resolve_target_mac(ns.mac)
+        if not effective_mac:
+            print("ERROR: No connected Sony WH-1000XM4 found via Bluetooth.")
+            return 1
+        action = (subarg or "get").lower()
+        if action not in ("get", "set"):
+            print("ERROR: settings action must be 'get' or 'set'.")
+            return 1
+        return _run_settings_workflow(
+            mac=effective_mac,
+            action=action,
+            key=pos[2] if len(pos) > 2 else None,
+            value=pos[3] if len(pos) > 3 else None,
+        )
 
     if subcmd == "parse" and subarg is not None:
         return _run_parse_workflow(transport=None, image_path=Path(subarg))

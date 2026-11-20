@@ -59,6 +59,11 @@ def candidate_commands(group: str, item: str, value: int) -> list[str]:
         f"AT+ENVDM=W,B,{group},{item},B,{hexval}",
         f"AT+ENVDM=W,1,{group},{item},B,{hexval}",
         f"AT+ENVDM=W,2,{group},{item},B,{hexval}",
+        # Firmware handler FUN_082143fc: exactly four tokens after W:
+        #   W,<group>,<item>,B,<hexbytes>   (raw, length = hex/2)
+        #   W,<group>,<item>,<len>,<ascii>  (type=2, strlen must equal len)
+        f"AT+ENVDM=W,{group},{item},B,{hexval}",
+        f"AT+ENVDM=W,{group},{item},B,31",
     ]
 
 

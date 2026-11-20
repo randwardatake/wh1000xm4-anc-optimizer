@@ -194,6 +194,34 @@ class TestCliEndToEnd:
         assert res.exit_code == 1
         assert "unknown anc mode" in res.output
 
+    def test_cli_settings_get(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class FakeClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_eq(self):
+                return bytes.fromhex("570100060a0a0a0a0a0a")
+
+            def get_general_setting(self, _enum):
+                return bytes.fromhex("d7d10101")
+
+            def get_audio_setting(self, _enum):
+                return bytes.fromhex("e7020001")
+
+            def get_system_setting(self, _enum):
+                return bytes.fromhex("f7050100")
+
+        monkeypatch.setattr("xm4_optimizer.cli.SonyControlClient.connect",
+                            lambda _mac: FakeClient())
+        runner = CliRunner()
+        res = runner.invoke(cli, ["--mac", "00:11:22:33:44:55", "settings", "get", "all"])
+        assert res.exit_code == 0, res.output
+        assert "touch-panel" in res.output
+        assert "speak-to-chat" in res.output
+
     def test_cli_parse_file_directly(self, tmp_path: Path) -> None:
         runner = CliRunner()
         dev = VirtualXM4Device(populate_defaults=True)

@@ -15,9 +15,12 @@ from xm4_optimizer.transport.sdp import find_rfcomm_channels, parse_data_element
 from xm4_optimizer.transport.sony_control import (
     AmbientSoundState,
     AncMode,
+    AudioSetting,
+    GeneralSetting,
     MessageType,
     SonyControlClient,
     SonyControlError,
+    SystemSetting,
     decode_ambient,
     decode_battery,
     decode_firmware_version,
@@ -114,6 +117,101 @@ class TestSonyControlClient:
 
         with pytest.raises(SonyControlError):
             SonyControlClient(Silent(), timeout_s=0.3).get_battery()
+
+
+class SettingsHeadset:
+    """Socket double for the MDR setting families (Table 1 and Table 2)."""
+
+    def __init__(self) -> None:
+        self.sent_payloads: list[bytes] = []
+        self.sent_tables: list[int] = []
+        self.state: dict[tuple[int, int], int] = {
+            (0xD6, 0xD1): 1, (0xD6, 0xD2): 0,
+            (0xE6, 0x01): 1, (0xE6, 0x02): 1,
+            (0xF6, 0x03): 1, (0xF6, 0x04): 0, (0xF6, 0x05): 0,
+            (0x48, 0x01): 0,
+        }
+        self._outbox = b""
+
+    def settimeout(self, _t: float) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def sendall(self, data: bytes) -> None:
+        pkt, _ = MdrPacket.from_wire_bytes(data)
+        if pkt is None or pkt.packet_type == MessageType.ACK:
+            return
+        self.sent_payloads.append(pkt.payload)
+        self.sent_tables.append(pkt.packet_type)
+        p = pkt.payload
+        out = [MdrPacket(MessageType.ACK, 1 - pkt.seq_num, b"")]
+        table = pkt.packet_type
+        if p[0] in (0xD6, 0xE6, 0xF6):
+            key = (p[0], p[1])
+            value = self.state.get(key, 0)
+            if p[0] == 0xF6 and p[1] == 0x04:
+                ret = bytes([0xF7, 0x04, 0x01, 0x11 if value else 0x10, 0x00])
+            else:
+                ret = bytes([p[0] + 1, p[1], 0x01 if p[0] != 0xE6 else 0x00, value])
+            out.append(MdrPacket(table, 1, ret))
+        elif p[0] in (0xD8, 0xE8, 0xF8):
+            self.state[(p[0] - 2, p[1])] = p[3]
+        elif p[0] == 0x48:
+            value = p[3]
+            self.state[(0x48, 0x01)] = value
+            out.append(MdrPacket(MessageType.COMMAND_2, 1, bytes([0x49, 0x01, 0x01, value])))
+        elif p[0] == 0x56:
+            out.append(MdrPacket(table, 1, bytes([0x57, 0x01, 0x00, 0x06] + [10] * 6)))
+        self._outbox += b"".join(m.to_wire_bytes() for m in out)
+
+    def recv(self, _n: int) -> bytes:
+        if not self._outbox:
+            raise socket.timeout()
+        data, self._outbox = self._outbox, b""
+        return data
+
+
+class TestMdrSettings:
+    def test_read_settings(self) -> None:
+        client = SonyControlClient(SettingsHeadset(), timeout_s=0.2)
+        assert client.get_general_setting(GeneralSetting.TOUCH_PANEL).hex() == "d7d10101"
+        assert client.get_audio_setting(AudioSetting.DSEE).hex() == "e7020001"
+        assert client.get_system_setting(SystemSetting.SPEAK_TO_CHAT).hex() == "f7050100"
+
+    def test_write_settings_with_readback(self) -> None:
+        dev = SettingsHeadset()
+        client = SonyControlClient(dev, timeout_s=0.2)
+        assert client.set_general_setting(GeneralSetting.TOUCH_PANEL, 0).hex() == "d7d10100"
+        assert client.set_audio_setting(AudioSetting.DSEE, 0).hex() == "e7020000"
+        assert client.set_system_setting(SystemSetting.SPEAK_TO_CHAT, 1).hex() == "f7050101"
+        assert dev.sent_payloads[0].hex() == "d8d10100"
+        assert dev.sent_payloads[2].hex() == "e8020000"
+        assert dev.sent_payloads[4].hex() == "f8050101"
+
+    def test_voice_guidance_uses_table2(self) -> None:
+        dev = SettingsHeadset()
+        client = SonyControlClient(dev, timeout_s=0.2)
+        assert client.set_voice_guidance(False).hex() == "49010101"
+        assert dev.sent_payloads[0].hex() == "48010101"
+        assert dev.sent_tables[0] == MessageType.COMMAND_2
+
+    def test_auto_power_off_encoding(self) -> None:
+        dev = SettingsHeadset()
+        client = SonyControlClient(dev, timeout_s=0.2)
+        assert client.set_auto_power_off(0x1100).hex() == "f704011100"
+        assert dev.sent_payloads[0].hex() == "f804011100"
+        with pytest.raises(ValueError):
+            client.set_auto_power_off(0x0F00)
+
+    def test_eq_encoding(self) -> None:
+        dev = SettingsHeadset()
+        client = SonyControlClient(dev, timeout_s=0.2)
+        client.set_eq_bands([0, 0, 0, 2, 6, 10])
+        assert dev.sent_payloads[0].hex() == "5801ff060a0a0a0c1014"
+        client.set_eq_preset(0xA1)
+        assert dev.sent_payloads[2].hex() == "5801a100"
 
 
 class TestSdp:
