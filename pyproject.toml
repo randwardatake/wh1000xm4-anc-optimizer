@@ -20,13 +20,20 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
 ]
+build = [
+    "pyinstaller>=6.0",
+]
 
 [project.scripts]
 xm4-optimizer = "xm4_optimizer.cli:main"
+xm4-optimizer-gui = "xm4_optimizer.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["xm4_optimizer*"]
+include = ["xm4_optimizer*", "tools"]
+
+[tool.setuptools.package-data]
+"xm4_optimizer.transport" = ["macos/*.swift", "macos/Info.plist"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

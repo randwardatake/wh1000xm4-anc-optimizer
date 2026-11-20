@@ -7,6 +7,9 @@ verified on a WH-1000XM4 running firmware 2.5.0 (see docs/STATUS.md).
 Frames reuse the 0x3E ... 0x3C framing, 0x3D escaping and modulo-256 checksum
 implemented by `MdrPacket`; only the message type values differ from the
 emulator's `MdrPacketType`.
+
+NOTE: the control-channel fallback for hosts without SDP was contributed by
+abdulhajiyev (PR #4, Windows) and lonelyversemaker (PR #3, macOS).
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 import socket
+import sys
 import time
 from typing import Optional, Sequence
 
@@ -25,6 +29,8 @@ SONY_CONTROL_UUID_V1: str = "96cc203e-5068-46ad-b32d-e316f5e069ba"
 # Device-verified channel on the test unit. Used only when SDP cannot be reached
 # (for example, a host without L2CAP SDP support); prefer SDP whenever available.
 DEFAULT_CONTROL_CHANNEL: int = 9
+# Name used by the Windows backend (PR #4); kept as an alias for callers.
+FALLBACK_CONTROL_CHANNEL: int = DEFAULT_CONTROL_CHANNEL
 
 
 class MessageType(IntEnum):
@@ -166,7 +172,11 @@ class SonyControlClient:
                 # SDP needs a raw L2CAP socket, which some hosts do not allow.
                 channel = DEFAULT_CONTROL_CHANNEL
             if channel is None:
-                raise SonyControlError("Device does not advertise the Sony MDR v1 control service")
+                # Windows has no L2CAP SDP at all; macOS may report no SDP record.
+                if sys.platform in ("win32", "darwin") or not hasattr(socket, "BTPROTO_L2CAP"):
+                    channel = DEFAULT_CONTROL_CHANNEL
+                else:
+                    raise SonyControlError("Device does not advertise the Sony MDR v1 control service")
         client = cls(create_rfcomm_socket(bd_addr, channel, timeout_s=5.0))
         client._send(bytes([Code.INIT_REQUEST, 0x00]))
         client._drain(0.5)

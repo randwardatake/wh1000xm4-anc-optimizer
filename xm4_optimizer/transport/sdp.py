@@ -3,7 +3,13 @@
 Sends a ServiceSearchAttributeRequest (Bluetooth Core Spec, Vol 3, Part B, §4.7) over
 L2CAP PSM 1 and walks the ProtocolDescriptorList (attribute 0x0004) of each matching
 record for the RFCOMM protocol UUID (0x0003) followed by its channel number.
-Linux only; needs a Python built with AF_BLUETOOTH / BTPROTO_L2CAP.
+Linux needs a Python built with AF_BLUETOOTH / BTPROTO_L2CAP (a libc fallback is
+provided); macOS delegates the lookup to IOBluetooth through macos_bridge, and Windows
+has no L2CAP sockets, so query_rfcomm_channel returns None there and callers fall back
+to the default control channel.
+
+NOTE: the Windows no-L2CAP fallback was contributed by abdulhajiyev (PR #4); the macOS
+IOBluetooth dispatch by lonelyversemaker (PR #3).
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ import ctypes
 import os
 import socket
 import struct
+import sys
 import uuid as uuid_mod
 from typing import Any, List, Optional, Tuple
 
@@ -137,7 +144,15 @@ def _connect_l2cap(bd_addr: str, timeout_s: float) -> socket.socket:
 
 
 def query_rfcomm_channel(bd_addr: str, service_uuid: str, timeout_s: float = 5.0) -> Optional[int]:
-    """Returns the first RFCOMM channel the device advertises for `service_uuid`, or None."""
+    """Returns the first RFCOMM channel the device advertises for `service_uuid`, or None.
+
+    None also means "SDP unavailable on this host platform" (Windows).
+    """
+    if sys.platform == "darwin":
+        from xm4_optimizer.transport import macos_bridge
+        return macos_bridge.query_rfcomm_channel(bd_addr, service_uuid, timeout_s)
+    if sys.platform == "win32":
+        return None
     target = uuid_mod.UUID(service_uuid)
     sock = _connect_l2cap(bd_addr, timeout_s)
     try:

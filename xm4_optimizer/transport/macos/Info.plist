@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.xm4-optimizer.rfcomm-bridge</string>
+	<key>CFBundleName</key>
+	<string>rfcomm_bridge</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>xm4_optimizer talks to your headset over Bluetooth RFCOMM.</string>
+</dict>
+</plist>

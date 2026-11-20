@@ -1,15 +1,22 @@
-"""Native Linux RFCOMM Socket Transport for Sony WH-1000XM4.
+"""RFCOMM Socket Transport for Sony WH-1000XM4 (Linux, Windows and macOS).
 
-Provides native Linux AF_BLUETOOTH RFCOMM socket handling, retry with exponential backoff,
-timeout management, and the concrete implementation of the DeviceTransport protocol.
+Provides native AF_BLUETOOTH/AF_BTH RFCOMM sockets on Linux/Windows, an IOBluetooth
+relay socket on macOS, retry with exponential backoff, timeout management and the
+concrete implementation of the DeviceTransport protocol.
+
+NOTE: Windows AF_BTH handling and PowerShell device discovery were contributed by
+abdulhajiyev (PR #4); the macOS IOBluetooth bridge was contributed by
+lonelyversemaker (PR #3). Both were merged with the device-verified NVDM read path
+already present in this repository.
 """
 
 from __future__ import annotations
 
 import socket
 import struct
+import sys
 import time
-from typing import Callable, Optional, Protocol, runtime_checkable
+from typing import Callable, List, Optional, Protocol, Tuple, runtime_checkable
 
 from xm4_optimizer.transport.protocol_race import (
     AtciTunnelRequest,
@@ -38,16 +45,33 @@ NVDM_STORAGE_TYPE: int = RaceStorageType.NVDM
 
 
 def create_rfcomm_socket(bd_addr: str, channel: int, timeout_s: float = DEFAULT_TIMEOUT_S) -> socket.socket:
-    """Creates and connects an RFCOMM socket on Linux.
+    """Creates and connects an RFCOMM socket on Linux, Windows or macOS.
 
-    Supports native socket.AF_BLUETOOTH if exported by Python, with transparent
-    libc socket(31, 1, 3) fallback for Python environments built without Bluetooth headers.
+    Uses socket.AF_BLUETOOTH / BTPROTO_RFCOMM when Python exports them (Linux with BlueZ
+    headers, and python.org Windows builds where it maps to Winsock AF_BTH). Linux also
+    has a libc socket(31, 1, 3) fallback for builds without Bluetooth headers. On macOS
+    the socket is relayed through the IOBluetooth helper in macos_bridge. On Windows the
+    headset must already be paired in Windows Settings.
     """
+    if sys.platform == "darwin":
+        from xm4_optimizer.transport.macos_bridge import open_rfcomm_socket
+        return open_rfcomm_socket(bd_addr, channel, timeout_s)
+
     if hasattr(socket, "AF_BLUETOOTH") and hasattr(socket, "BTPROTO_RFCOMM"):
         s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
         s.settimeout(timeout_s)
-        s.connect((bd_addr, channel))
+        try:
+            s.connect((bd_addr, channel))
+        except BaseException:
+            s.close()
+            raise
         return s
+
+    if sys.platform == "win32":
+        raise OSError(
+            "This Python build has no Bluetooth socket support. Use the python.org "
+            "Windows installer, which includes AF_BLUETOOTH."
+        )
 
     import ctypes
     libc = ctypes.CDLL(None, use_errno=True)
@@ -76,26 +100,108 @@ def create_rfcomm_socket(bd_addr: str, channel: int, timeout_s: float = DEFAULT_
     return s
 
 
-def find_connected_xm4_mac() -> Optional[str]:
-    """Auto-detects connected Sony WH-1000XM4 Bluetooth MAC address via bluetoothctl."""
+_NAME_HINTS = ("1000xm4", "wh-")
+
+# Windows PnP enumeration via PowerShell (contributed by abdulhajiyev, PR #4).
+# DEVPKEY_Device_IsConnected (... 15) tells us whether the link is live.
+_WINDOWS_LIST_SCRIPT = (
+    "Get-PnpDevice -Class Bluetooth -PresentOnly | "
+    "Where-Object { $_.InstanceId -match '^BTHENUM\\\\DEV_[0-9A-Fa-f]{12}' } | "
+    "ForEach-Object { $c = (Get-PnpDeviceProperty -InstanceId $_.InstanceId "
+    "-KeyName '{83DA6326-97A6-4088-9453-A1923F573B29} 15' -ErrorAction SilentlyContinue).Data; "
+    "\"$($_.InstanceId)|$($_.FriendlyName)|$c\" }"
+)
+
+
+def parse_bluetoothctl_devices(out: str) -> list[tuple[str, str]]:
+    """Parses `bluetoothctl devices [Connected]` output into (mac, name) pairs."""
     import re
-    import subprocess
-    try:
-        out = subprocess.check_output(["bluetoothctl", "devices", "Connected"], text=True)
-        for line in out.splitlines():
-            m = re.search(r"Device\s+([0-9A-Fa-f:]{17})\s+(.*)", line)
-            if m:
-                mac, name = m.group(1), m.group(2)
-                if "1000xm4" in name.lower() or "wh-" in name.lower():
-                    return mac
-        lines = [l for l in out.splitlines() if "Device " in l]
-        if len(lines) == 1:
-            m = re.search(r"Device\s+([0-9A-Fa-f:]{17})", lines[0])
-            if m:
-                return m.group(1)
-    except Exception:
-        pass
+    devices = []
+    for line in out.splitlines():
+        m = re.search(r"Device\s+([0-9A-Fa-f:]{17})\s*(.*)", line)
+        if m:
+            devices.append((m.group(1), m.group(2).strip()))
+    return devices
+
+
+def parse_windows_pnp_devices(out: str) -> list[tuple[str, str, bool]]:
+    """Parses `instance_id|friendly_name|is_connected` lines into (mac, name, connected)."""
+    import re
+    devices = []
+    for line in out.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) < 2:
+            continue
+        m = re.search(r"DEV_([0-9A-Fa-f]{12})", parts[0])
+        if not m:
+            continue
+        raw = m.group(1).upper()
+        mac = ":".join(raw[i:i + 2] for i in range(0, 12, 2))
+        connected = len(parts) > 2 and parts[2].strip().lower() == "true"
+        devices.append((mac, parts[1].strip(), connected))
+    return devices
+
+
+def _pick_xm4(devices: list[tuple[str, str]]) -> Optional[str]:
+    for mac, name in devices:
+        if any(h in name.lower() for h in _NAME_HINTS):
+            return mac
+    if len(devices) == 1:
+        return devices[0][0]
     return None
+
+
+def _list_windows_devices() -> list[tuple[str, str, bool]]:
+    import subprocess
+    out = subprocess.check_output(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_LIST_SCRIPT],
+        text=True, timeout=20, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return parse_windows_pnp_devices(out)
+
+
+def list_connected_devices() -> List[Tuple[str, str]]:
+    """Returns (MAC, name) of connected devices: IOBluetooth on macOS, PowerShell on
+    Windows, `bluetoothctl devices Connected` on Linux.
+    """
+    if sys.platform == "darwin":
+        from xm4_optimizer.transport import macos_bridge
+        return macos_bridge.list_connected_devices()
+    if sys.platform == "win32":
+        return [(mac, name) for mac, name, connected in _list_windows_devices() if connected]
+
+    import subprocess
+    out = subprocess.check_output(["bluetoothctl", "devices", "Connected"], text=True)
+    return parse_bluetoothctl_devices(out)
+
+
+def is_device_connected(bd_addr: str) -> bool:
+    """True if `bd_addr` is among the currently connected Bluetooth devices."""
+    return bd_addr.upper() in (mac.upper() for mac, _ in list_connected_devices())
+
+
+def find_connected_xm4_mac() -> Optional[str]:
+    """Auto-detects a connected Sony WH-1000XM4 on Linux, Windows or macOS."""
+    try:
+        devices = list_connected_devices()
+    except Exception:
+        return None
+    return _pick_xm4(devices)
+
+
+def is_link_connected(bd_addr: str) -> Optional[bool]:
+    """True/False if the OS reports the link state of `bd_addr`; None if it cannot be queried."""
+    try:
+        if sys.platform == "win32":
+            want = bd_addr.upper()
+            for mac, _name, connected in _list_windows_devices():
+                if mac == want:
+                    return connected
+            return False
+        return is_device_connected(bd_addr)
+    except Exception:
+        return None
 
 
 # --- Exception Hierarchy ---

@@ -258,7 +258,8 @@ def flash_firmware(bd_addr: str, fw_path: Path, allow_unknown: bool = False) -> 
                 print(f"\rFlashing: [{p_idx+1}/{total_pages}] ({pct:.1f}%) — {speed:.1f} KB/s", end="", flush=True)
 
         elapsed = time.time() - t0
-        print(f"\nStaging complete in {elapsed:.1f}s ({fw_len / 1024 / elapsed:.1f} KB/s)!")
+        # NOTE: zero-elapsed guard from the Windows work of abdulhajiyev (PR #4).
+        print(f"\nStaging complete in {elapsed:.1f}s ({fw_len / 1024 / max(elapsed, 0.001):.1f} KB/s)!")
 
         print("Requesting device firmware integrity check...")
         race.request(CMD_CHECK_INTEGRITY, bytes([0x01, 0x00, storage]), timeout=20.0)

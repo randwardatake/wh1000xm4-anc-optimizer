@@ -73,6 +73,7 @@ from xm4_optimizer.transport.rfcomm_socket import (
     BluetoothRfcommTransport,
     create_rfcomm_socket,
     DeviceTransport,
+    is_device_connected,
     NVDM_PARTITION_BASE,
     NVDM_PARTITION_SIZE,
     read_nvdm_partition,
@@ -378,9 +379,9 @@ def _run_status_workflow(mac: Optional[str]) -> int:
     effective_mac = _resolve_target_mac(mac)
     print(f"  Connected Headset MAC : {effective_mac or 'Not detected (Disconnected)'}")
 
+    # NOTE: platform-independent link query contributed by lonelyversemaker (PR #3).
     try:
-        bt_out = subprocess.check_output(["bluetoothctl", "info", effective_mac or ""], text=True) if effective_mac else ""
-        connected = "Connected: yes" in bt_out
+        connected = is_device_connected(effective_mac) if effective_mac else False
         print(f"  Bluetooth Link        : {'CONNECTED' if connected else 'DISCONNECTED'}")
     except Exception:
         connected = False

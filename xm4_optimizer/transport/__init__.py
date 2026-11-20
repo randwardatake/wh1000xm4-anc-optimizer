@@ -1,7 +1,8 @@
 """Communication and transport subsystem for Sony WH-1000XM4.
 
-Exposes DeviceTransport protocol, native Linux RfcommDeviceTransport,
-VirtualXM4Device in-memory mock harness, and partition reading routines.
+Exposes DeviceTransport protocol, the cross-platform RfcommDeviceTransport
+(Linux/Windows/macOS), VirtualXM4Device in-memory mock harness, and partition
+reading routines.
 """
 
 from __future__ import annotations
@@ -59,6 +60,9 @@ from xm4_optimizer.transport.rfcomm_socket import (
     DeviceTransport,
     find_connected_xm4_mac,
     FlashOperationError,
+    is_device_connected,
+    is_link_connected,
+    list_connected_devices,
     NVDM_PARTITION_BASE,
     NVDM_PARTITION_SIZE,
     NVDM_STORAGE_TYPE,
@@ -78,6 +82,9 @@ __all__ = [
     "create_rfcomm_socket",
     "read_nvdm_partition",
     "find_connected_xm4_mac",
+    "list_connected_devices",
+    "is_device_connected",
+    "is_link_connected",
     # Constants
     "DEFAULT_MDR_CHANNEL",
     "DEFAULT_RACE_CHANNEL",

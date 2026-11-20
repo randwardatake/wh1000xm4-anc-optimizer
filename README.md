@@ -155,6 +155,12 @@ The tests run against an in-memory emulator. Passing tests do not show that a wr
 4. **More Sony models:** per-model profiles, a dump → partition extraction → **redaction** workflow so owners can share data safely, and a contributor guide for forks.
 5. **Apps:** Linux, Windows and Android front ends on a shared core. On Android, features that need root are listed in the normal app and marked "root only".
 
+## Acknowledgments
+
+The desktop app is built on the "XM4 Control" GUI contributed by **abdulhajiyev**
+(Windows support + GUI base, [PR #4](https://github.com/randwardatake/wh1000xm4-anc-optimizer/pull/4)); the macOS IOBluetooth bridge came from
+**lonelyversemaker** ([PR #3](https://github.com/randwardatake/wh1000xm4-anc-optimizer/pull/3)). Some of the unified GUI and its tests were AI-assisted. See [CREDITS.md](CREDITS.md).
+
 ## License
 
 GPL-3.0-or-later, see [LICENSE](LICENSE). Third-party components keep their own licences: Valve Steam Audio (Apache-2.0) is downloaded separately by `tools/download_steamaudio.py` and is not part of this repository.
