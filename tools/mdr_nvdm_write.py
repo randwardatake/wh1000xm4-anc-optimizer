@@ -6,8 +6,10 @@ code 0xFF, subcommand 6 as a raw NVDM read/write. For write, payload[6] = 2 and 
 rest encodes group, item and value; FUN_0824B6CC validates them against a 79-entry
 whitelist that includes config/test_vp_disable, config/eq_* and config/stc_enable.
 
-Writing a setting this way makes the firmware store it in NVDM immediately; unlike
-AT+NCOPTSET it does not depend on a power-off save.
+Only flag 1 (read) and flag 3 (write) are accepted by the firmware; flag 2 is a
+no-op. The write also refreshes the firmware's settings RAM cache via FUN_0824b420,
+so the new value is not reverted by the power-off batch save (unlike a raw
+AT+ENVDM=W write, which bypasses that cache). Device-verified on v2.5.0.
 
 Usage:
     python3 tools/mdr_nvdm_write.py --item test_vp_disable --value 1
@@ -43,10 +45,23 @@ def build_nvdm_write_payload(group: str, item: str, value: bytes) -> bytes:
     if len(value) > 0xFFFF:
         raise ValueError("value too long")
     return b"".join([
-        bytes([CMD_TANDEM_TEST, SUBCMD_NVDM, 0x00, 0x01, 0x00, 0x00, 0x02]),
+        # Device test 2026-11-20: flag 3 is the write selector. Flag 2 returns the
+        # same ACK but leaves NVDM unchanged; flag 3 persists immediately.
+        bytes([CMD_TANDEM_TEST, SUBCMD_NVDM, 0x00, 0x01, 0x00, 0x00, 0x03]),
         bytes([len(group_b)]), group_b,
         bytes([len(item_b)]), item_b,
         len(value).to_bytes(2, "big"), value,
+    ])
+
+
+def build_nvdm_read_payload(group: str, item: str) -> bytes:
+    """Builds the 0xFF/6 payload for reading one NVDM item."""
+    group_b = group.encode("ascii")
+    item_b = item.encode("ascii")
+    return b"".join([
+        bytes([CMD_TANDEM_TEST, SUBCMD_NVDM, 0x00, 0x01, 0x00, 0x00, 0x01]),
+        bytes([len(group_b)]), group_b,
+        bytes([len(item_b)]), item_b,
     ])
 
 
@@ -90,11 +105,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--value", default="1", help="ASCII value to store (default: 1)")
     parser.add_argument("--channel", type=int, default=DEFAULT_CONTROL_CHANNEL)
     parser.add_argument("--write", action="store_true", help="actually send the command")
+    parser.add_argument("--read", action="store_true", help="read the item through 0xFF/6 instead")
     args = parser.parse_args(argv)
 
-    payload = build_nvdm_write_payload(args.group, args.item, args.value.encode("ascii"))
+    payload = (build_nvdm_read_payload(args.group, args.item) if args.read
+               else build_nvdm_write_payload(args.group, args.item, args.value.encode("ascii")))
     print(f"payload: {payload.hex()}")
-    if not args.write:
+    if not args.write and not args.read:
         print("Dry run. Pass --write to send this frame to the headset.")
         return 0
 
