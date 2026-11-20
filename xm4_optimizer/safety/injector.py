@@ -1,8 +1,9 @@
 """NCOPTSET-based Coefficient Injector for Sony WH-1000XM4 ANC Optimization.
 
 Sends optimizer coefficients to the CXD90050 DSP via AT+NCOPTTOOL=NCOPTSET through
-the ATCI relay tunnel. No flash writes — the firmware saves coefficients to NVDM on
-power-off (FUN_082bb5d8). Verified on device 2026-10-27.
+the ATCI relay tunnel. Verified on device 2026-10-27. NCOPTSET changes DSP state but
+is not the source of either NVDM write path, so values do not persist on power-off
+(see docs/STATUS.md).
 """
 
 from __future__ import annotations
@@ -68,7 +69,7 @@ def execute_injection(
     2. Send AT+NCOPTTOOL=NCOPTSET,<offset>,0x<value> for each of the 10 words.
     3. Optionally verify via NCOPTGET state change (null→data).
 
-    No flash writes. NVDM persistence happens on headphone power-off.
+    No flash writes. NVDM persistence does not happen through this path.
     """
     _enforce_stability_gate(optimized_coeff)
 

@@ -232,7 +232,8 @@ def _run_inject_workflow(
 
     status = "NCOPTGET confirmed" if result.ncoptget_confirmed else "sent (NCOPTGET not confirmed)"
     print(f"INJECTION SUCCEEDED: {result.words_sent} words sent via NCOPTSET ({status})")
-    print("NOTE: Coefficients are in DSP RAM. Power off headphones to save to NVDM.")
+    print("NOTE: Coefficients are in DSP RAM. This path is not saved to NVDM on power-off;")
+    print("      see docs/STATUS.md and tools/optimizer_trigger.py.")
     return 0
 
 
@@ -254,7 +255,7 @@ def _run_rollback_workflow(transport: DeviceTransport, backup_path: Path) -> int
     if ok:
         print(
             f"ROLLBACK SUCCEEDED: Identity coefficients sent via NCOPTSET.\n"
-            f"NOTE: Power off headphones to save to NVDM."
+            f"NOTE: NCOPTSET does not persist these values to NVDM on power-off."
         )
         return 0
     return 1
@@ -419,8 +420,9 @@ ARCHITECTURAL DISTINCTION: FLASHER vs. INJECTOR
 2. `xm4-optimizer inject --target-gain <dB>` (NC Optimizer Coefficient Injector):
    - Targets config/optimizer_coeff (40 bytes, 2x5 Q4.28 big-endian words) via NCOPTSET.
    - NCOPTSET sends coefficients directly to CXD90050 DSP1 in real time.
-   - No flash writes — the firmware saves to NVDM on headphone power-off (FUN_082bb5d8).
-   - NCOPTSET verified on device 2026-10-27; power-cycle NVDM persistence pending.
+   - No flash writes. NCOPTSET values are not the source of either NVDM write path
+     (optimizer completion FUN_082bb5d8 or power-off batch FUN_082bb4b8).
+   - NCOPTSET verified on device 2026-10-27; NVDM persistence failed 3 power-cycle tests.
    - Disabled on real hardware until --allow-unverified-write is given. See docs/STATUS.md.
 ====================================================================================================
 """

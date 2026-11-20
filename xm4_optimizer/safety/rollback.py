@@ -2,8 +2,8 @@
 
 Backup: reads the full NVDM partition (512 KB on real hardware, 128 KB on mock) with
 SHA-256 sidecar. Rollback: sends identity coefficients via NCOPTSET to reset the DSP
-to pass-through. Flash writes are blocked on retail firmware — NVDM persistence happens
-on headphone power-off.
+to pass-through. Flash writes are blocked on retail firmware, and NCOPTSET does not
+persist to NVDM on power-off (see docs/STATUS.md).
 """
 
 from __future__ import annotations
@@ -81,8 +81,8 @@ def execute_rollback(
     """Resets optimizer coefficients to identity via NCOPTSET.
 
     The backup file is validated but not flashed — flash writes are blocked on retail
-    firmware. Instead, identity coefficients (b0=1.0, rest=0) are sent via NCOPTSET,
-    which the firmware saves to NVDM on power-off.
+    firmware. Instead, identity coefficients (b0=1.0, rest=0) are sent via NCOPTSET
+    to reset live DSP state. NVDM persistence is not part of this path.
     """
     bpath = Path(backup_file_path)
     if not bpath.exists():

@@ -390,3 +390,41 @@ class TestRfcommTransport:
             sock.send_all(b"test")
         with pytest.raises(DeviceDisconnectedError):
             sock.recv_exact(10)
+
+    def test_real_transport_reads_nvdm_storage_and_logical_address(self) -> None:
+        """Hardware NVDM lives in storage_type=1 at logical address 0, not NOR flash."""
+        from xm4_optimizer.transport.rfcomm_socket import RfcommDeviceTransport
+
+        captured: list[RacePacket] = []
+        page = bytes(range(256))
+
+        def fake_exchange(packet: RacePacket) -> RacePacket:
+            captured.append(packet)
+            # Real device returns an 8-byte payload header followed by 256 data bytes.
+            payload = struct.pack("<BBHI", 0x00, 0x01, 0x01, 0x00001000) + page
+            return RacePacket(
+                head=RaceHead.STANDARD,
+                type=RaceHeaderType.RESPONSE,
+                cmd_id=RaceOpcode.PAGE_READ,
+                payload=payload,
+            )
+
+        transport = RfcommDeviceTransport("00:11:22:33:44:55")
+        transport.send_race_packet = fake_exchange  # type: ignore[method-assign]
+        data = transport.read_flash_page(NVDM_PARTITION_BASE + 0x1000)
+
+        storage, page_count, logical_addr = struct.unpack("<BBI", captured[0].payload)
+        assert storage == RaceStorageType.NVDM
+        assert page_count == 1
+        assert logical_addr == 0x1000
+        assert data == page
+
+    def test_real_transport_rejects_address_outside_nvdm_store(self) -> None:
+        from xm4_optimizer.transport.rfcomm_socket import (
+            FlashOperationError,
+            RfcommDeviceTransport,
+        )
+
+        transport = RfcommDeviceTransport("00:11:22:33:44:55")
+        with pytest.raises(FlashOperationError):
+            transport.read_flash_page(NVDM_PARTITION_BASE + NVDM_PARTITION_SIZE)

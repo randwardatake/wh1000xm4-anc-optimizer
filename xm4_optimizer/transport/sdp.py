@@ -8,11 +8,15 @@ Linux only; needs a Python built with AF_BLUETOOTH / BTPROTO_L2CAP.
 
 from __future__ import annotations
 
+import ctypes
+import os
 import socket
 import struct
 import uuid as uuid_mod
 from typing import Any, List, Optional, Tuple
 
+AF_BLUETOOTH: int = getattr(socket, "AF_BLUETOOTH", 31)
+BTPROTO_L2CAP: int = getattr(socket, "BTPROTO_L2CAP", 1)
 SDP_PSM: int = 1
 PDU_SERVICE_SEARCH_ATTR_REQ: int = 0x06
 PDU_SERVICE_SEARCH_ATTR_RSP: int = 0x07
@@ -101,13 +105,42 @@ def build_search_attr_request(service_uuid: uuid_mod.UUID, transaction_id: int, 
     return struct.pack(">BHH", PDU_SERVICE_SEARCH_ATTR_REQ, transaction_id, len(params)) + params
 
 
+def _connect_l2cap(bd_addr: str, timeout_s: float) -> socket.socket:
+    """Connects to the SDP L2CAP PSM, with a libc fallback for Python without AF_BLUETOOTH."""
+    if hasattr(socket, "AF_BLUETOOTH") and hasattr(socket, "BTPROTO_L2CAP"):
+        sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+        sock.settimeout(timeout_s)
+        sock.connect((bd_addr, SDP_PSM))
+        return sock
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.socket.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    libc.socket.restype = ctypes.c_int
+    libc.connect.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+    libc.connect.restype = ctypes.c_int
+    fd = libc.socket(AF_BLUETOOTH, socket.SOCK_SEQPACKET, BTPROTO_L2CAP)
+    if fd < 0:
+        err = ctypes.get_errno()
+        raise OSError(err, f"libc.socket(AF_BLUETOOTH L2CAP) failed: {err}")
+
+    mac_bytes = bytes.fromhex(bd_addr.replace(":", ""))[::-1]
+    # struct sockaddr_l2 { sa_family_t; bdaddr_t; uint16_t psm; uint16_t cid; }
+    addr_l2 = struct.pack("<H6sHH", AF_BLUETOOTH, mac_bytes, SDP_PSM, 0)
+    if libc.connect(fd, addr_l2, len(addr_l2)) != 0:
+        err = ctypes.get_errno()
+        os.close(fd)
+        raise OSError(err, f"Failed to connect SDP L2CAP to {bd_addr}: {err}")
+
+    sock = socket.socket(fileno=fd)
+    sock.settimeout(timeout_s)
+    return sock
+
+
 def query_rfcomm_channel(bd_addr: str, service_uuid: str, timeout_s: float = 5.0) -> Optional[int]:
     """Returns the first RFCOMM channel the device advertises for `service_uuid`, or None."""
     target = uuid_mod.UUID(service_uuid)
-    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
-    sock.settimeout(timeout_s)
+    sock = _connect_l2cap(bd_addr, timeout_s)
     try:
-        sock.connect((bd_addr, SDP_PSM))
         collected = b""
         continuation = b""
         for transaction_id in range(1, 33):

@@ -90,7 +90,13 @@ class VirtualXM4Device:
             "ALIGN_FB_R": [0, 0, 1 << 28, 0, 0] * 5,
         }
         self.ncopt_data: Optional[List[int]] = None
+        # DSP heap buffer at 0x1001A7B8. NCOPTSET may update it, but neither the
+        # power-off batch save nor the optimizer completion handler reads it.
         self.optimizer_ram_buffer: List[int] = list(OPTIMIZER_COEFF_IDENTITY)
+        # Source of the power-off batch save (FUN_08240bf4 -> FUN_08255878(1) ->
+        # FUN_082bb4b8). NCOPTSET does not touch it; only the optimizer result does.
+        self.power_off_save_buffer: List[int] = list(OPTIMIZER_COEFF_IDENTITY)
+        self.optimizer_is_optimized: bool = False
         self._ncoptset_updates_ram: bool = True
         # Fault Injection Flags
         self.fail_read: bool = False
@@ -222,6 +228,7 @@ class VirtualXM4Device:
                         self.ncopt_data = [0] * OPTIMIZER_COEFF_WORDS
                     if 0 <= offset < OPTIMIZER_COEFF_WORDS:
                         self.ncopt_data[offset] = value & 0xFFFFFFFF
+                        self.optimizer_is_optimized = True
                         if self._ncoptset_updates_ram:
                             self.optimizer_ram_buffer[offset] = value & 0xFFFFFFFF
                     return "\r\nOK\r\n"
@@ -418,27 +425,40 @@ class VirtualXM4Device:
             seq += 1
         self._next_seq = seq
 
+    def run_nc_optimizer(self, result: OptimizerCoefficient) -> None:
+        """Emulates the NC Optimizer generation-end handler (FUN_082bb5d8).
+
+        The firmware builds a 40-word result struct, byte-swaps 10 words LE->BE,
+        sends them to the CXD90050 and writes them to NVDM immediately. This is
+        the only path that puts a non-identity value into config/optimizer_coeff.
+        NCOPTSET values are overwritten by the optimizer result.
+        """
+        words = list(result.words)
+        self.ncopt_data = list(words)
+        self.optimizer_ram_buffer = list(words)
+        self.power_off_save_buffer = list(words)
+        self.optimizer_is_optimized = False
+        self._append_nvdm_item(
+            "config", "optimizer_coeff", OptimizerCoefficient(words=words).pack()
+        )
+
     def power_cycle(self) -> None:
-        """Emulates firmware power-off save + power-on restore cycle.
+        """Emulates a power-off batch save followed by a power-on restore.
 
-        Power-off (FUN_082bb5d8 @ 0x082bb5d8): saves optimizer_ram_buffer to NVDM.
-        Power-on (FUN_082bb468 @ 0x082bb468): reads config/optimizer_coeff from NVDM,
-        restores to both RAM buffer and DSP state.
-
-        Whether NCOPTSET updates the RAM buffer is controlled by _ncoptset_updates_ram,
-        which must be set BEFORE sending NCOPTSET commands (firmware decides at write time,
-        not at power-off time). See docs/STATUS.md NCOPTSET handler analysis.
+        Power-off (FUN_08240bf4 -> FUN_08255878(1) -> FUN_082bb4b8) saves the
+        firmware's own state buffer. Power-on (FUN_082bb468) reads
+        config/optimizer_coeff from NVDM and restores it to the DSP and RAM.
+        NCOPTSET writes DSP state directly and is not part of either path, so
+        marker values written only with NCOPTSET are lost on power cycle.
         """
         self.is_connected = False
 
-        # --- Power-off: FUN_082bb5d8 emulation ---
-        # Firmware reads from optimizer_ram_buffer (0x1001A7B8), not from DSP1 state.
-        # If _ncoptset_updates_ram was False, ram buffer was never updated by NCOPTSET.
-        save_words = list(self.optimizer_ram_buffer)
-        coeff = OptimizerCoefficient(words=save_words)
-        val_bytes = coeff.pack()  # big-endian Q4.28, matches firmware byte-swap output
-
-        self._append_nvdm_item("config", "optimizer_coeff", val_bytes)
+        # --- Power-off: firmware state buffer -> NVDM ---
+        self._append_nvdm_item(
+            "config",
+            "optimizer_coeff",
+            OptimizerCoefficient(words=list(self.power_off_save_buffer)).pack(),
+        )
 
         # --- Power-on: FUN_082bb468 emulation ---
         partition = parse_nvdm_image(bytes(self.flash), strict=False)
@@ -447,9 +467,11 @@ class VirtualXM4Device:
             restored = OptimizerCoefficient.unpack(item.value)
             self.ncopt_data = list(restored.words)
             self.optimizer_ram_buffer = list(restored.words)
+            self.power_off_save_buffer = list(restored.words)
         else:
             self.ncopt_data = None
             self.optimizer_ram_buffer = list(OPTIMIZER_COEFF_IDENTITY)
+            self.power_off_save_buffer = list(OPTIMIZER_COEFF_IDENTITY)
 
         self.is_connected = True
 

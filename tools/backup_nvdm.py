@@ -65,6 +65,60 @@ def find_connected_xm4_mac() -> Optional[str]:
     return None
 
 
+def dump_nvdm_bytes(
+    bd_addr: str,
+    peb_count: int = TOTAL_PEBS,
+    *,
+    show_progress: bool = True,
+) -> bytes:
+    """Reads the full NVDM store over RACE storage_type=1 and returns raw bytes.
+
+    This is the device-verified pipelined transfer used by the backup tool. It does
+    not send the MDR update-mode handshake; NVDM page reads work without it.
+    """
+    dump_buffer = bytearray()
+    t_start = time.time()
+
+    s_race = create_rfcomm_socket(bd_addr, DEFAULT_RACE_CHANNEL, timeout_s=4.0)
+    if show_progress:
+        print(f"[*] Step 2/3: Connecting to Airoha RACE on RFCOMM channel {DEFAULT_RACE_CHANNEL}...")
+        print("    -> RACE session established. Beginning pipelined PEB transfer...\n")
+    try:
+        for peb_idx in range(peb_count):
+            batch_req = bytearray()
+            for pg in range(PAGES_PER_PEB):
+                addr = peb_idx * PEB_SIZE + pg * PAGE_SIZE
+                payload = struct.pack("<BBI", 1, 1, addr)  # storage=1 (NVDM), count=1, addr=addr
+                batch_req.extend(struct.pack("<BBHH", 0x05, 0x5A, 2 + len(payload), 0x0403) + payload)
+
+            s_race.sendall(batch_req)
+
+            resp_buf = bytearray()
+            expected_bytes = PAGES_PER_PEB * 270
+            while len(resp_buf) < expected_bytes:
+                chunk = s_race.recv(expected_bytes - len(resp_buf))
+                if not chunk:
+                    raise ConnectionResetError("RACE RFCOMM socket closed unexpectedly by headset")
+                resp_buf.extend(chunk)
+
+            for pg in range(PAGES_PER_PEB):
+                frame = resp_buf[pg * 270 : (pg + 1) * 270]
+                ret_code = frame[6]
+                if ret_code != 0:
+                    raise RuntimeError(f"RACE page read error at PEB {peb_idx} page {pg}: code 0x{ret_code:02X}")
+                dump_buffer.extend(frame[14:270])
+
+            pct = ((peb_idx + 1) / peb_count) * 100.0
+            elapsed = time.time() - t_start
+            kb = len(dump_buffer) // 1024
+            if show_progress and ((peb_idx + 1) % 16 == 0 or peb_idx == peb_count - 1):
+                print(f"  [+] Dumped PEB {peb_idx + 1:3d}/{peb_count:3d} ({kb:3d} KB / {pct:5.1f}%) in {elapsed:4.1f}s")
+    finally:
+        s_race.close()
+
+    return bytes(dump_buffer)
+
+
 def backup_xm4_nvdm(bd_addr: str, output_path: Path, peb_count: int = TOTAL_PEBS) -> Path:
     """Executes the full MDR-handshake and RACE-pipelined NVDM dump workflow."""
     print("=================================================================")
@@ -98,50 +152,9 @@ def backup_xm4_nvdm(bd_addr: str, output_path: Path, peb_count: int = TOTAL_PEBS
         print("    Attempting to proceed to RACE channel 21 directly...")
 
     # 2. RACE Channel 21 Pipelined Dump
-    dump_buffer = bytearray()
-    t_start = time.time()
     try:
-        print(f"[*] Step 2/3: Connecting to Airoha RACE on RFCOMM channel {DEFAULT_RACE_CHANNEL}...")
-        s_race = create_rfcomm_socket(bd_addr, DEFAULT_RACE_CHANNEL, timeout_s=4.0)
-        print("    -> RACE session established. Beginning pipelined PEB transfer...\n")
-
-        for peb_idx in range(peb_count):
-            # Pipeline 16 page read requests for this 4KB block
-            batch_req = bytearray()
-            for pg in range(PAGES_PER_PEB):
-                addr = peb_idx * PEB_SIZE + pg * PAGE_SIZE
-                payload = struct.pack("<BBI", 1, 1, addr)  # storage=1 (NVDM), count=1, addr=addr
-                batch_req.extend(struct.pack("<BBHH", 0x05, 0x5A, 2 + len(payload), 0x0403) + payload)
-
-            s_race.sendall(batch_req)
-
-            resp_buf = bytearray()
-            expected_bytes = PAGES_PER_PEB * 270
-            while len(resp_buf) < expected_bytes:
-                chunk = s_race.recv(expected_bytes - len(resp_buf))
-                if not chunk:
-                    raise ConnectionResetError("RACE RFCOMM socket closed unexpectedly by headset")
-                resp_buf.extend(chunk)
-
-            # Extract 256 bytes payload from each 270 bytes frame
-            for pg in range(PAGES_PER_PEB):
-                frame = resp_buf[pg * 270 : (pg + 1) * 270]
-                ret_code = frame[6]
-                if ret_code != 0:
-                    raise RuntimeError(f"RACE page read error at PEB {peb_idx} page {pg}: code 0x{ret_code:02X}")
-                dump_buffer.extend(frame[14:270])
-
-            pct = ((peb_idx + 1) / peb_count) * 100.0
-            elapsed = time.time() - t_start
-            kb = len(dump_buffer) // 1024
-            if (peb_idx + 1) % 16 == 0 or peb_idx == peb_count - 1:
-                print(f"  [+] Dumped PEB {peb_idx + 1:3d}/{peb_count:3d} ({kb:3d} KB / {pct:5.1f}%) in {elapsed:4.1f}s")
-
+        dump_bytes = dump_nvdm_bytes(bd_addr, peb_count=peb_count)
     finally:
-        try:
-            s_race.close()
-        except Exception:
-            pass
         try:
             print("\n[*] Step 3/3: Releasing update mode and closing MDR connection...")
             s_mdr.sendall(bytes.fromhex("3e0e0100000004440102015b3c"))
@@ -151,19 +164,19 @@ def backup_xm4_nvdm(bd_addr: str, output_path: Path, peb_count: int = TOTAL_PEBS
 
     # 3. Verification and File Writing
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(bytes(dump_buffer))
-    sha256 = hashlib.sha256(dump_buffer).hexdigest()
+    output_path.write_bytes(dump_bytes)
+    sha256 = hashlib.sha256(dump_bytes).hexdigest()
     sidecar_path = output_path.with_name(f"{output_path.name}.sha256")
     sidecar_path.write_text(f"{sha256}  {output_path.name}\n", encoding="utf-8")
 
-    magic = dump_buffer[:4]
+    magic = dump_bytes[:4]
     magic_valid = (magic == b"NVDM")
 
     print("\n" + "=" * 65)
     print("  BACKUP COMPLETED SUCCESSFULLY")
     print("=" * 65)
     print(f"  File Path      : {output_path.resolve()}")
-    print(f"  Total Size     : {len(dump_buffer):,} bytes ({len(dump_buffer) // 1024} KB)")
+    print(f"  Total Size     : {len(dump_bytes):,} bytes ({len(dump_bytes) // 1024} KB)")
     print(f"  SHA-256 Check  : {sha256}")
     print(f"  SHA-256 File   : {sidecar_path.name}")
     print(f"  Header Magic   : {magic.decode('ascii', errors='replace')} ({'VALID' if magic_valid else 'WARNING: UNKNOWN'})")

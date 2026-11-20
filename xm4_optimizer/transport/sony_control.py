@@ -19,9 +19,12 @@ from typing import Optional
 
 from xm4_optimizer.transport.protocol_mdr import MdrPacket, MdrStreamDecoder
 from xm4_optimizer.transport.rfcomm_socket import create_rfcomm_socket
-from xm4_optimizer.transport.sdp import query_rfcomm_channel
+from xm4_optimizer.transport.sdp import SdpError, query_rfcomm_channel
 
 SONY_CONTROL_UUID_V1: str = "96cc203e-5068-46ad-b32d-e316f5e069ba"
+# Device-verified channel on the test unit. Used only when SDP cannot be reached
+# (for example, a host without L2CAP SDP support); prefer SDP whenever available.
+DEFAULT_CONTROL_CHANNEL: int = 9
 
 
 class MessageType(IntEnum):
@@ -121,7 +124,11 @@ class SonyControlClient:
     @classmethod
     def connect(cls, bd_addr: str, channel: Optional[int] = None) -> "SonyControlClient":
         if channel is None:
-            channel = query_rfcomm_channel(bd_addr, SONY_CONTROL_UUID_V1)
+            try:
+                channel = query_rfcomm_channel(bd_addr, SONY_CONTROL_UUID_V1)
+            except (OSError, SdpError):
+                # SDP needs a raw L2CAP socket, which some hosts do not allow.
+                channel = DEFAULT_CONTROL_CHANNEL
             if channel is None:
                 raise SonyControlError("Device does not advertise the Sony MDR v1 control service")
         client = cls(create_rfcomm_socket(bd_addr, channel, timeout_s=5.0))

@@ -26,7 +26,7 @@ Every claim in this repository is graded by evidence in **[docs/STATUS.md](docs/
 | EQ presets for EasyEffects and Equalizer APO | [`presets/`](presets) | Ready to use |
 | ANC filter synthesis and dry-run | `python3 -m xm4_optimizer --mock --dry-run` | Simulation only |
 | `inject` / `verify` / `rollback` of ANC filters | — | **Disabled on hardware.** Their storage model is contradicted by a real dump ([details](docs/STATUS.md#anc-calibration-inject-verify-rollback)). They run with `--mock` only. |
-| Persistent ANC coefficient injection | — | **In progress.** RAM injection tested (3 power-cycle attempts), NVDM persistence not yet achieved. See [STATUS.md](docs/STATUS.md) for details. |
+| Persistent ANC coefficient injection | — | **In progress.** RAM injection failed 3 power-cycle tests: the firmware saves NVDM from its own buffers, not from the RAM written by NCOPTSET. `python3 tools/optimizer_trigger.py --start` runs the NC Optimizer and compares NVDM before/after. See [STATUS.md](docs/STATUS.md). |
 | Spatial audio (AeroSpatial: PipeWire + Steam Audio) | see [aerospatial/pipewire/README.md](aerospatial/pipewire/README.md) | Experimental; failed its first listening test |
 | Custom voice prompt packs | — | Planned ([Roadmap](#roadmap)) |
 
@@ -115,7 +115,7 @@ xm4_optimizer/   Python package and CLI (python3 -m xm4_optimizer)
   nvdm/          NVDM parser (validated on a real dump); cxd90050.py holds the unverified biquad model
   dsp/           Q4.28 fixed point, biquad synthesis, stability checks, frequency response
   safety/        dry-run, injector, verifier, rollback (emulator only, see STATUS)
-tools/           backup_nvdm.py, flash_firmware.py, Steam Audio download and PipeWire scripts
+tools/           backup_nvdm.py, flash_firmware.py, optimizer_trigger.py (NC Optimizer experiment), Steam Audio download and PipeWire scripts
 aerospatial/     C++ spatial audio prototype (Steam Audio + PipeWire)
 presets/         EQ presets
 tests/           430 Python tests (emulator, parser fuzzing, DSP); C++ tests live in aerospatial/tests
@@ -134,7 +134,7 @@ The tests run against an in-memory emulator. Passing tests do not show that a wr
 ## Roadmap
 
 1. **Repository hygiene (done 2026-10-26):** English documentation, evidence ledger, write commands disabled on hardware, licence fixed.
-2. **Firmware reverse engineering (in progress):** Full Ghidra decompilation of v2.5.0 firmware, RACE dispatch table mapped, NVDM handler structure identified. NC Optimizer data flow partially traced. Goal: identify the exact power-off save path for `config/optimizer_coeff` to enable persistent ANC coefficient injection.
+2. **Firmware reverse engineering (in progress):** v2.5.0 fully decompiled (5406 functions), RACE dispatch table mapped. The two NVDM write paths for `config/optimizer_coeff` are identified: optimizer generation end (`FUN_082bb5d8`) and the power-off batch (`FUN_082bb4b8`). Goal: reach the optimizer result struct so a custom coefficient can be made persistent.
 3. **Device-proven tools into the package:** move the tested backup and flash code paths into the library, check firmware files against known hashes, and add **voice-pack** commands (extract, build, install) using the same upload sequence as Sony's app ([fix-whxm4-voice](https://github.com/aaron-p1/fix-whxm4-voice) documents it).
 4. **More Sony models:** per-model profiles, a dump → partition extraction → **redaction** workflow so owners can share data safely, and a contributor guide for forks.
 5. **Apps:** Linux, Windows and Android front ends on a shared core. On Android, features that need root are listed in the normal app and marked "root only".

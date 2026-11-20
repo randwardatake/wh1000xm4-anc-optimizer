@@ -19,6 +19,7 @@ from xm4_optimizer.transport.protocol_race import (
     PageReadRequest,
     PageReadResponse,
     RacePacket,
+    RaceStorageType,
     FLASH_PAGE_SIZE,
     RACE_HEADER_SIZE,
 )
@@ -28,8 +29,12 @@ DEFAULT_RACE_CHANNEL: int = 21
 DEFAULT_TIMEOUT_S: float = 3.0
 DEFAULT_RETRY_COUNT: int = 5
 DEFAULT_BACKOFF_FACTOR: float = 0.2
+# Kept as the virtual base used by the mock and by existing callers. On real hardware
+# NVDM is addressed through storage_type=1 with addresses starting at 0 (device-verified
+# by tools/backup_nvdm.py), not through NOR flash at 0x000DF000.
 NVDM_PARTITION_BASE: int = 0x000DF000
 NVDM_PARTITION_SIZE: int = 0x80000  # 512 KB (2048 pages of 256 bytes)
+NVDM_STORAGE_TYPE: int = RaceStorageType.NVDM
 
 
 def create_rfcomm_socket(bd_addr: str, channel: int, timeout_s: float = DEFAULT_TIMEOUT_S) -> socket.socket:
@@ -260,12 +265,23 @@ class RfcommDeviceTransport:
         return RacePacket(head=head, type=type_, cmd_id=cmd_id, payload=payload_bytes)
 
     def read_flash_page(self, address: int) -> bytes:
-        """Reads exactly 256 bytes from NOR flash address (must be 0x100 aligned)."""
-        req = PageReadRequest(address=address)
+        """Reads one 256-byte NVDM page using the device-verified storage_type=1 path.
+
+        ``address`` is the virtual address used by callers (base NVDM_PARTITION_BASE).
+        The device receives the logical address relative to that base, because NVDM is
+        a separate address space on retail firmware. A full 4 MB scan of NOR flash
+        (storage_type=0) found no NVDM blocks; see docs/STATUS.md.
+        """
+        logical_addr = address - NVDM_PARTITION_BASE
+        if logical_addr < 0 or logical_addr + FLASH_PAGE_SIZE > NVDM_PARTITION_SIZE:
+            raise FlashOperationError(
+                f"NVDM address 0x{address:08X} outside the 512 KiB logical store"
+            )
+        req = PageReadRequest(address=logical_addr, storage_type=NVDM_STORAGE_TYPE)
         resp_pkt = self.send_race_packet(req.to_packet())
         resp = PageReadResponse.from_payload(resp_pkt.payload)
         if resp.return_code != 0:
-            raise FlashOperationError(f"RACE read flash page failed at 0x{address:08X} with code 0x{resp.return_code:02X}")
+            raise FlashOperationError(f"RACE read NVDM page failed at 0x{address:08X} with code 0x{resp.return_code:02X}")
         return resp.data
 
     def write_flash_page(self, address: int, data: bytes) -> bool:
